@@ -60,7 +60,19 @@ Resources:
   AllDB:
     Type: AWS::EC2::Instance
     Metadata:
-      AWS::CloudFormation::Init: {}
+      AWS::CloudFormation::Init:
+        config:
+            files:
+                /tmp/init-done:
+                    content: ''
+                    owner: root
+                    group: root
+                    mode: '000644'
+      OpenStack::Database::Users:
+        Keystone:
+          User: { Ref: KeystoneDbUser }
+          Databases: [ { Ref: KeystoneDatabase } ]
+          Password: { Ref: KeystoneDbPassword }
     Properties:
       ImageId:
         Fn::Join:
