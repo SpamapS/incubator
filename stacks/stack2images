@@ -1,0 +1,106 @@
+#!/usr/bin/python
+
+import argparse
+import json
+import logging
+import sys
+import yaml
+
+METADATA_NAMESPACE = 'TripleO::ImageBuilder'
+CONFIG_ELEMENT_MAP = {
+    'Keystone': 'keystone',
+    'Database': 'mysql',
+}
+
+
+# Read stack
+def read_stack(stack_path):
+    with open(stack_path) as stack_file:
+        try:
+            stack = json.load(stack_file)
+        except ValueError:
+            stack_file.seek(0)
+            try:
+                stack = yaml.safe_load(stack_file)
+            except yaml.parser.ParserError, e:
+                logging.error(e)
+                return False
+    # Sanity checks
+    if type(stack) != dict:
+        logging.error(
+                'Expecting map, instead got python type %s' % type(stack))
+        return False
+    if 'Resources' not in stack:
+        logging.error('Stack has no resources')
+    if 'Description' not in stack:
+        logging.warn('Stack has no description')
+    logging.info('Loaded %s (%s)' % (stack_path, stack.get('Description')))
+    return stack
+
+
+# Find metadata with TripleO::ImageBuilder::Elements
+def find_element_metadata(stack):
+    found = []
+    for resource_key, resource in stack['Resources'].iteritems():
+        resource_elements = set()
+        logging.debug('Inspecting %s' % resource_key)
+        metadata = resource.get('Metadata', {})
+        for m_key, m_item in metadata.iteritems():
+            logging.debug('Inspecting %s' % m_key)
+            try:
+                prefix, under = m_key.rsplit('::', 1)
+            except ValueError:
+                logging.debug('Ignoring %s->%s' % (resource_key, m_key))
+                continue
+            major, minor = prefix.split('::', 2)
+            if minor in CONFIG_ELEMENT_MAP:
+                resource_elements.add(CONFIG_ELEMENT_MAP[minor])
+            if prefix != METADATA_NAMESPACE:
+                logging.debug('Ignoring %s->%s [%s]'
+                        % (resource_key, m_key, prefix))
+                continue
+            logging.debug('Found %s' % m_key)
+            resource_elements.update(m_item)
+            found.append(resource_elements)
+    return found
+
+
+# build image with said elements
+def build_images(prefix, found, extra):
+    for f in found:
+        key = '-'.join(sorted(f))
+        command = ('disk-image-create -o %s%s %s'
+            % (prefix, key, ' '.join(list(f) + extra)))
+        print command
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('stack_path',
+            help='Stack to determine images from')
+    parser.add_argument('--log-level', default='WARN',
+            help='Basic root logging level')
+    parser.add_argument('--extra', '-e', nargs='*', default=[],
+            help='Extra elements to add')
+    parser.add_argument('--prefix', '-p', default='image-',
+            help='Prefix for image names')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=options.log_level)
+
+    stack = read_stack(options.stack_path)
+    if not stack:
+        return 1
+
+    found = find_element_metadata(stack)
+    if found:
+        build_images(options.prefix, found, options.extra)
+
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())
+
+
+#     # Determine name from template?
+#   upload images
