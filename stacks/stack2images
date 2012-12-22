@@ -1,8 +1,11 @@
 #!/usr/bin/python
 
 import argparse
+import glanceclient
 import json
 import logging
+import os
+import subprocess
 import sys
 import yaml
 
@@ -11,6 +14,17 @@ CONFIG_ELEMENT_MAP = {
     'Keystone': 'keystone',
     'Database': 'mysql',
 }
+
+
+class Run(object):
+    noop = False
+
+    @classmethod
+    def cmd(cls, args):
+        if cls.noop:
+            print ' '.join(args)
+        else:
+            subprocess.check_call(args)
 
 
 # Read stack
@@ -66,12 +80,37 @@ def find_element_metadata(stack):
 
 
 # build image with said elements
-def build_images(prefix, found, extra):
+def build_images(prefix, found, extra, use_existing):
+    images = []
     for f in found:
         key = '-'.join(sorted(f))
-        command = ('disk-image-create -o %s%s %s'
-            % (prefix, key, ' '.join(list(f) + extra)))
-        print command
+        image_name = '%s%s' % (prefix, '-'.join(sorted(f)))
+        images.append(image_name)
+        image_file_name = '%s.qcow2' % image_name
+        if os.path.exists(image_file_name) and use_existing:
+            logging.info('Using existing image file %s' % image_file_name)
+            continue
+        command = ['disk-image-create', '-o', '%s' % image_name]
+        command.extend(f)
+        command.extend(extra)
+        Run.cmd(command)
+    return images
+
+
+#   upload images
+def upload_images(images, noop):
+    for img in images:
+        img_filename = '%s.qcow2' % img
+        args = ['glance', 'image-create',
+                    '--name', img,
+                    '--public', '--container-format', 'bare',
+                    '--disk-format', 'qcow2']
+        if noop:
+            print '%s < %s' % (' '.join(args), img_filename)
+        else:
+            with open(img_filename) as img_file:
+                glance = subprocess.Popen(args, stdin=img_file)
+                glance.wait()
 
 
 def main():
@@ -84,9 +123,15 @@ def main():
             help='Extra elements to add')
     parser.add_argument('--prefix', '-p', default='image-',
             help='Prefix for image names')
+    parser.add_argument('--noop', '-n', default=False, action='store_true',
+            help='Just print actions instead of executing them.')
+    parser.add_argument('--use-existing', default=False, action='store_true',
+            help='Use any existing image files rather than building new ones.')
     options = parser.parse_args()
 
     logging.basicConfig(level=options.log_level)
+
+    Run.noop = options.noop
 
     stack = read_stack(options.stack_path)
     if not stack:
@@ -94,7 +139,9 @@ def main():
 
     found = find_element_metadata(stack)
     if found:
-        build_images(options.prefix, found, options.extra)
+        images = build_images(options.prefix, found, options.extra, options.use_existing)
+        if images:
+            upload_images(images, options.noop)
 
     return 0
 
@@ -103,4 +150,3 @@ if __name__ == '__main__':
 
 
 #     # Determine name from template?
-#   upload images

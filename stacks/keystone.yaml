@@ -57,6 +57,14 @@ Resources:
           Ref: KeystoneDatabase
         Password:
           Ref: KeystoneDbPassword
+      OpenStack::Keystone::Bootstrap:
+        Tenants:
+            Name: admin
+            Users:
+                Name: admin
+                Password: funkytown
+      TripleO::ImageBuilder::Elements:
+        - keystone
   AllDB:
     Type: AWS::EC2::Instance
     Metadata:
@@ -73,6 +81,8 @@ Resources:
           User: { Ref: KeystoneDbUser }
           Databases: [ { Ref: KeystoneDatabase } ]
           Password: { Ref: KeystoneDbPassword }
+      TripleO::ImageBuilder::Elements:
+        - mysql
     Properties:
       ImageId:
         Fn::Join:
