@@ -10,10 +10,6 @@ Parameters:
     AllowedValues: [t1.micro, m1.small, m1.large, m1.xlarge, m2.xlarge,
       m2.2xlarge, m2.4xlarge, c1.medium, c1.xlarge, cc1.4xlarge]
     ConstraintDescription: must be a valid Flavor
-  ImageGen:
-    Default: ubuntu-quantal-0
-    Description: Prefix used for images
-    Type: String
   KeystoneDbUser:
     Default: keystone
     Description: Database User for Keystone
@@ -26,16 +22,17 @@ Parameters:
     Default: keystone
     Description: Database for Keystone
     Type: String
+  KeystoneImage:
+    Type: String
+  AllDBImage:
+    Type: String
 Resources:
   Keystone:
     Type: AWS::EC2::Instance
     DependsOn: AllDB
     Properties:
       ImageId:
-        Fn::Join:
-        - ''
-        - - {Ref: ImageGen}
-          - -keystone
+        {Ref: KeystoneImage}
       InstanceType: {Ref: InstanceType}
       KeyName: {Ref: KeyName}
       UserData: '#cloud-config'
@@ -85,10 +82,7 @@ Resources:
         - mysql
     Properties:
       ImageId:
-        Fn::Join:
-        - ''
-        - - {Ref: ImageGen}
-          - -mysql
+        {Ref: AllDBImage}
       InstanceType: {Ref: InstanceType}
       KeyName: {Ref: KeyName}
       UserData: ''

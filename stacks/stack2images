@@ -2,13 +2,13 @@
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
@@ -42,8 +42,8 @@ class Run(object):
             subprocess.check_call(args)
 
 
-# Read stack
 def read_stack(stack_path):
+    """ Read HEAT stack """
     with open(stack_path) as stack_file:
         try:
             stack = json.load(stack_file)
@@ -57,7 +57,7 @@ def read_stack(stack_path):
     # Sanity checks
     if type(stack) != dict:
         logging.error(
-                'Expecting map, instead got python type %s' % type(stack))
+            'Expecting map, instead got python type %s' % type(stack))
         return False
     if 'Resources' not in stack:
         logging.error('Stack has no resources')
@@ -67,8 +67,12 @@ def read_stack(stack_path):
     return stack
 
 
-# Find metadata with TripleO::ImageBuilder::Elements
 def find_element_metadata(stack):
+    """ Find metadata with TripleO::ImageBuilder::Elements """
+    string_params = set()
+    for pname, p in iter(stack.get('Parameters', {}).items()):
+        if p.get('Type', 'String') == 'String':
+            string_params.add(pname)
     found = []
     for resource_key, resource in stack['Resources'].iteritems():
         resource_elements = set()
@@ -86,21 +90,27 @@ def find_element_metadata(stack):
                 resource_elements.add(CONFIG_ELEMENT_MAP[minor])
             if prefix != METADATA_NAMESPACE:
                 logging.debug('Ignoring %s->%s [%s]'
-                        % (resource_key, m_key, prefix))
+                              % (resource_key, m_key, prefix))
                 continue
             logging.debug('Found %s' % m_key)
             resource_elements.update(m_item)
-            found.append(resource_elements)
+        # If ImageId is a single Ref{} to a parameter, we can pass it to heat
+        image_param = None
+        image_id = resource.get('Properties', {}).get('ImageId')
+        if isinstance(image_id, dict) and image_id.keys() == ['Ref']:
+            if image_id['Ref'] in string_params:
+                image_param = image_id['Ref']
+        found.append((resource_elements, image_param))
     return found
 
 
-# build image with said elements
 def build_images(prefix, found, extra, use_existing):
+    """ build images for stack elements """
     images = []
-    for f in found:
+    for f, image_param in found:
         key = '-'.join(sorted(f))
         image_name = '%s%s' % (prefix, '-'.join(sorted(f)))
-        images.append(image_name)
+        images.append((image_name, image_param))
         image_file_name = '%s.qcow2' % image_name
         if os.path.exists(image_file_name) and use_existing:
             logging.info('Using existing image file %s' % image_file_name)
@@ -112,14 +122,14 @@ def build_images(prefix, found, extra, use_existing):
     return images
 
 
-#   upload images
 def upload_images(images, noop):
-    for img in images:
+    """ upload images to glance """
+    for img, _ in images:
         img_filename = '%s.qcow2' % img
         args = ['glance', 'image-create',
-                    '--name', img,
-                    '--public', '--container-format', 'bare',
-                    '--disk-format', 'qcow2']
+                '--name', img,
+                '--public', '--container-format', 'bare',
+                '--disk-format', 'qcow2']
         if noop:
             print '%s < %s' % (' '.join(args), img_filename)
         else:
@@ -128,21 +138,45 @@ def upload_images(images, noop):
                 glance.wait()
 
 
+def run_heat(images, options):
+    params = []
+    for i, param in images:
+        if param:
+                params.append('%s=%s' % (param, i))
+    if len(params) != len(images):
+        print >>sys.stderr, 'Cannot determine parameters to run heat.'
+        if len(params):
+            print >>sys.stderr, ('Known parameters are as follows: %s'
+                                 % (params))
+    else:
+        args = ['heat', 'create', options.stack_name,
+                '--template-file', options.stack_path,
+                '--parameters', ';'.join(params)]
+        Run.cmd(args)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('stack_path',
-            help='Stack to determine images from')
+                        help='Stack to determine images from')
+    parser.add_argument('stack_name', nargs='?',
+                        help='Stack name for heat')
     parser.add_argument('--log-level', default='WARN',
-            help='Basic root logging level')
+                        help='Basic root logging level')
     parser.add_argument('--extra', '-e', nargs='*', default=[],
-            help='Extra elements to add')
+                        help='Extra elements to add')
     parser.add_argument('--prefix', '-p', default='image-',
-            help='Prefix for image names')
+                        help='Prefix for image names')
     parser.add_argument('--noop', '-n', default=False, action='store_true',
-            help='Just print actions instead of executing them.')
+                        help='Just print actions instead of executing them.')
     parser.add_argument('--use-existing', default=False, action='store_true',
-            help='Use any existing image files rather than building new ones.')
+                        help='Use any existing image files.')
+    parser.add_argument('--skip-heat', default=False, action='store_true',
+                        help='Do not try to run heat')
     options = parser.parse_args()
+
+    if options.stack_name is None:
+        options.stack_name = options.stack_path.rsplit('.', 1)[0]
 
     logging.basicConfig(level=options.log_level)
 
@@ -154,14 +188,15 @@ def main():
 
     found = find_element_metadata(stack)
     if found:
-        images = build_images(options.prefix, found, options.extra, options.use_existing)
+        images = build_images(options.prefix,
+                              found, options.extra, options.use_existing)
         if images:
             upload_images(images, options.noop)
+
+            if not options.skip_heat:
+                run_heat(images, options)
 
     return 0
 
 if __name__ == '__main__':
     sys.exit(main())
-
-
-#     # Determine name from template?
